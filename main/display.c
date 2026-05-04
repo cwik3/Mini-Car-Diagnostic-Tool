@@ -18,7 +18,7 @@ static void oled_send_command(uint8_t command) {
     i2c_master_write_byte(cmd, 0x00, true);
     i2c_master_write_byte(cmd, command, true);
     i2c_master_stop(cmd);
-    i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(10));
+    i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(100));
     i2c_cmd_link_delete(cmd);
 }
 
@@ -29,7 +29,7 @@ static void oled_send_data(uint8_t *data, size_t length) {
     i2c_master_write_byte(cmd, 0x40, true);
     i2c_master_write(cmd, data, length, true);
     i2c_master_stop(cmd);
-    i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(10));
+    i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(100));
     i2c_cmd_link_delete(cmd);
 }
 
@@ -52,7 +52,10 @@ static const uint8_t font_5x7[][5] = {
     {0x3F, 0x40, 0x40, 0x40, 0x3F}, 
     {0x7F, 0x49, 0x49, 0x49, 0x41}, 
     {0x7F, 0x40, 0x40, 0x40, 0x40},
-    {0x23, 0x13, 0x08, 0x64, 0x62}  
+    {0x23, 0x13, 0x08, 0x64, 0x62},
+    {0x7F, 0x08, 0x14, 0x22, 0x41},
+    {0x20, 0x10, 0x08, 0x04, 0x02},
+    {0x7F, 0x08, 0x08, 0x08, 0x7F}  
 };
 
 static void oled_print_char(uint8_t character) {
@@ -66,6 +69,9 @@ static void oled_print_char(uint8_t character) {
     if (character == 'E') index = 16;
     if (character == 'L') index = 17;
     if (character == '%') index = 18;
+    if (character == 'K') index = 19;
+    if(character == 'H') index = 21;
+    if(character == '/') index = 20;
     if (character == ' ') index = 10;
     uint8_t buf[6];
     memcpy(buf, font_5x7[index], 5);
@@ -73,19 +79,26 @@ static void oled_print_char(uint8_t character) {
     oled_send_data(buf, 6);
 }
 
-void display_update(int rpm, int fuel_level) {
-    oled_send_command(0xB0 + 3);
-    oled_send_command(0x00 + (40 & 0x0F));
-    oled_send_command(0x10 + ((40 >> 4) & 0x0F));
-    char text[16];
-    snprintf(text, sizeof(text), "%04d RPM", rpm);
+static void oled_xy(uint8_t x, uint8_t y) {
+    oled_send_command(0xB0 + y);            // Now we can adjust x y postion of the data where to display
+    oled_send_command(0x00 + (x & 0x0F));
+    oled_send_command(0x10 + ((x >> 4) & 0x0F));
+}
+
+void display_update(int rpm, int fuel_level, int speed) {
+    char text[32];
+    oled_xy(10, 1); 
+    snprintf(text, sizeof(text), "%3d KM/H    ", speed);
     for (int i = 0; text[i] != '\0'; i++) {
         oled_print_char(text[i]);
     }
-    oled_send_command(0xB0 + 6);
-    oled_send_command(0x00 + (40 & 0x0F));
-    oled_send_command(0x10 + ((40 >> 4) & 0x0F));
-    snprintf(text, sizeof(text), "%03d%% FUEL", fuel_level);
+    oled_xy(10, 4); 
+    snprintf(text, sizeof(text), "%4d RPM    ", rpm);
+    for (int i = 0; text[i] != '\0'; i++) {
+        oled_print_char(text[i]);
+    }
+    oled_xy(10, 7); 
+    snprintf(text, sizeof(text), "FUEL %3d%%   ", fuel_level);
     for (int i = 0; text[i] != '\0'; i++) {
         oled_print_char(text[i]);
     }
@@ -122,7 +135,6 @@ void display_init(void) {
     for (int i = 0; i < sizeof(init_cmds); i++) {
         oled_send_command(init_cmds[i]);
     }
-    oled_send_command(0xAF);
     for (int page = 0; page < 8; page++) {
         oled_send_command(0xB0 + page);
         oled_send_command(0x00);
@@ -130,6 +142,6 @@ void display_init(void) {
         uint8_t blank[128] = {0};
         oled_send_data(blank, 128);
     }
-    
+    oled_send_command(0xAF);
     ESP_LOGI(TAG, "OLED ON");
 }
