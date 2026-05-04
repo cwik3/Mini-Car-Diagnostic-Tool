@@ -30,11 +30,14 @@ int can_mock_get_rpm(void) {
 static void tx_task(void *arg){
     ESP_LOGI(TAG, "Starting TX task");
     int current_rpm = 800;
+    int current_speed = 10;
+    int add = 10;
     int inc = 50;
     int state = 0;
     int current_fuel_value = 100;
-    int fuel_dec = -3;
-    const TickType_t fuel_decrease_interval = pdMS_TO_TICKS(20000); // fuel drop interval for simluation
+    int fuel_dec = -1;
+
+    const TickType_t fuel_decrease_interval = pdMS_TO_TICKS(1500); // fuel drop interval for simluation
     TickType_t last_fuel_decrease_time = xTaskGetTickCount();
     uint8_t data_payload1[8] = {0x04, 0x41, 0x00, 0x00, 0x00, 0xAA, 0xAA, 0xAA}; 
     // can FRAMEWORK WE want to recieve
@@ -78,13 +81,27 @@ static void tx_task(void *arg){
             esp_err_t ret = twai_node_transmit(node_hdl, &message, pdMS_TO_TICKS(100));
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Error w Ramce CANu: %s", esp_err_to_name(ret));
+            } 
+            state = 2;
+        } else if (state == 2){
+            data_payload1[2] = 0x0D; //Vehicle speed PID
+            data_payload1[3] = current_speed;
+            esp_err_t ret = twai_node_transmit(node_hdl, &message, pdMS_TO_TICKS(100));
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "TX Error: %s", esp_err_to_name(ret));
             }
-
+            current_speed += add;
+            if (current_speed >= 150) {
+                add = -15; 
+            } else if (current_speed <= 30) {
+                add = 35;  
+            }
             state = 0;  
-        }
+        } 
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-}    
+}
+
 
 static bool rx_callback(twai_node_handle_t node,const twai_rx_done_event_data_t *event_data, void *user_data){
     uint8_t isr_buffer[8];
@@ -113,21 +130,24 @@ static void rx_task(void *arg)
 {
     ESP_LOGI(TAG, "starting RX task");
     can_message_t received_msg;
+    int rx_fuel_level = 0;
+    int rx_speed = 0;
     while (1) {
         if (xQueueReceive(rx_queue, &received_msg, pdMS_TO_TICKS(1100)) == pdTRUE) {
             ESP_LOGI("RX", "Ramka otzrymana ID: 0x%lX", received_msg.id);
             if (received_msg.id == 0x7E8) {
                 if(received_msg.data[2] == 0x0C){             
                     current_rpm = ((received_msg.data[3] * 256) + received_msg.data[4]) / 4;
-                    ESP_LOGI("RX", "Ramka CAN odebrana, aktualne RPM to %d", current_rpm);
-                    display_update_rpm(current_rpm); // przekazuje rpm na oled
             }else if(received_msg.data[2] == 0x2F){
-                    int fuel_level = (received_msg.data[3] * 100)/ 255; 
-                    ESP_LOGI("RX", "Ramka CAN odebrana, aktualny poziom paliwa to %d%%", fuel_level);
-                }
+                    rx_fuel_level = (received_msg.data[3] * 100)/ 255; 
+            } else if(received_msg.data[2] == 0x0D){
+                    rx_speed = received_msg.data[3];
+            }
+                ESP_LOGI(TAG, "Ramka CAN z Paramterami Odebarana %d, Fuel Level: %d%%, Speed: %d KM/H", current_rpm, rx_fuel_level, rx_speed);
+                display_update(current_rpm, rx_fuel_level, rx_speed);
+            }
         }
     }
-}
 }
 
 
