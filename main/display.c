@@ -47,7 +47,12 @@ static const uint8_t font_5x7[][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, 
     {0x7F, 0x09, 0x19, 0x29, 0x46}, 
     {0x7F, 0x09, 0x09, 0x09, 0x06}, 
-    {0x7F, 0x02, 0x0C, 0x02, 0x7F}  
+    {0x7F, 0x02, 0x0C, 0x02, 0x7F},
+    {0x7F, 0x09, 0x09, 0x09, 0x01}, 
+    {0x3F, 0x40, 0x40, 0x40, 0x3F}, 
+    {0x7F, 0x49, 0x49, 0x49, 0x41}, 
+    {0x7F, 0x40, 0x40, 0x40, 0x40},
+    {0x23, 0x13, 0x08, 0x64, 0x62}  
 };
 
 static void oled_print_char(uint8_t character) {
@@ -56,6 +61,11 @@ static void oled_print_char(uint8_t character) {
     if (character == 'R') index = 11;
     if (character == 'P') index = 12;
     if (character == 'M') index = 13;
+    if (character == 'F') index = 14;
+    if (character == 'U') index = 15;
+    if (character == 'E') index = 16;
+    if (character == 'L') index = 17;
+    if (character == '%') index = 18;
     if (character == ' ') index = 10;
     uint8_t buf[6];
     memcpy(buf, font_5x7[index], 5);
@@ -63,7 +73,7 @@ static void oled_print_char(uint8_t character) {
     oled_send_data(buf, 6);
 }
 
-void display_update_rpm(int rpm) {
+void display_update(int rpm, int fuel_level) {
     oled_send_command(0xB0 + 3);
     oled_send_command(0x00 + (40 & 0x0F));
     oled_send_command(0x10 + ((40 >> 4) & 0x0F));
@@ -72,10 +82,16 @@ void display_update_rpm(int rpm) {
     for (int i = 0; text[i] != '\0'; i++) {
         oled_print_char(text[i]);
     }
+    oled_send_command(0xB0 + 6);
+    oled_send_command(0x00 + (40 & 0x0F));
+    oled_send_command(0x10 + ((40 >> 4) & 0x0F));
+    snprintf(text, sizeof(text), "%03d%% FUEL", fuel_level);
+    for (int i = 0; text[i] != '\0'; i++) {
+        oled_print_char(text[i]);
+    }
 }
 
 void display_init(void) {
-    ESP_LOGI(TAG, "Odplam I2C");
     i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = I2C_SDA,
@@ -102,12 +118,11 @@ void display_init(void) {
         0xA6,       
         0xD5, 0x80, 
         0x8D, 0x14, 
-        0xAF        // Display ON
     };
     for (int i = 0; i < sizeof(init_cmds); i++) {
         oled_send_command(init_cmds[i]);
     }
-
+    oled_send_command(0xAF);
     for (int page = 0; page < 8; page++) {
         oled_send_command(0xB0 + page);
         oled_send_command(0x00);
