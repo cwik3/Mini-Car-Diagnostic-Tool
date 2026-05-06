@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "display.h"
+#include <math.h>
 
 static const char *TAG = "TWAI/CAN_MOCK_test";
 
@@ -31,11 +32,16 @@ static void tx_task(void *arg){
     ESP_LOGI(TAG, "Starting TX task");
     int current_rpm = 800;
     int current_speed = 10;
+    int coolant_temp = 20;
     int add = 10;
     int inc = 50;
     int state = 0;
     int current_fuel_value = 100;
     int fuel_dec = -1;
+    static int step = 0;
+    static const int MAX_STEPS = 100;
+    int throtle_pos = 0;
+    int engine_load = 0;
 
     const TickType_t fuel_decrease_interval = pdMS_TO_TICKS(1500); // fuel drop interval for simluation
     TickType_t last_fuel_decrease_time = xTaskGetTickCount();
@@ -80,7 +86,7 @@ static void tx_task(void *arg){
             data_payload1[3] = (current_fuel_value * 255) / 100;
             esp_err_t ret = twai_node_transmit(node_hdl, &message, pdMS_TO_TICKS(100));
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "Error w Ramce CANu: %s", esp_err_to_name(ret));
+                ESP_LOGE(TAG, "Error w Ramce CANu w fuel status: %s", esp_err_to_name(ret));
             } 
             state = 2;
         } else if (state == 2){
@@ -88,7 +94,7 @@ static void tx_task(void *arg){
             data_payload1[3] = current_speed;
             esp_err_t ret = twai_node_transmit(node_hdl, &message, pdMS_TO_TICKS(100));
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "TX Error: %s", esp_err_to_name(ret));
+                ESP_LOGE(TAG, "TX Error w ramce vehicle speed: %s", esp_err_to_name(ret));
             }
             current_speed += add;
             if (current_speed >= 150) {
@@ -96,9 +102,42 @@ static void tx_task(void *arg){
             } else if (current_speed <= 30) {
                 add = 35;  
             }
-            state = 0;  
+            state = 3;
+        }else if(state == 3){
+            data_payload1[2] = 0x05; // Coolant temperature PID
+            step++;
+            if (step > MAX_STEPS) { 
+                step = MAX_STEPS; // Zatrzymuje się na maxie
+            }
+            int current_coolant = 20 + (int)(70.0f * (log(1.0f + step) / log(1.0f + MAX_STEPS)));
+            data_payload1[3] = current_coolant + 40;
+            twai_node_transmit(node_hdl, &message, pdMS_TO_TICKS(100));
+            state = 4;
+        }else if(state == 4){
+            data_payload1[2] = 0x11; // Throttle position PID
+            static float angle = 0.0f;
+            angle += 0.2f;
+            if (angle > 2.0f * 3.14159f) {
+                angle -= 2.0f * 3.14159f; 
+            }
+            int throttle_pos = (int)(50.0f + 50.0f * sin(angle));
+            data_payload1[3] = (throttle_pos * 255) / 100; 
+            
+            twai_node_transmit(node_hdl, &message, pdMS_TO_TICKS(100));
+            state = 5;
+        } else if(state == 5){
+            data_payload1[2] = 0x04; // Engine Load PID
+            data_payload1[3] = (engine_load * 255) / 100;
+            esp_err_t ret = twai_node_transmit(node_hdl, &message, pdMS_TO_TICKS(100));
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "TX Error w ramce engine_load: %s", esp_err_to_name(ret));
+            }
+            engine_load += 2;
+            if (engine_load > 100) engine_load = 0; 
+            
+            state = 0;
         } 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -132,6 +171,9 @@ static void rx_task(void *arg)
     can_message_t received_msg;
     int rx_fuel_level = 0;
     int rx_speed = 0;
+    int rx_coolant_temp = 0;
+    int rx_throttle_pos = 0;
+    int rx_engine_load = 0;
     while (1) {
         if (xQueueReceive(rx_queue, &received_msg, pdMS_TO_TICKS(1100)) == pdTRUE) {
             ESP_LOGI("RX", "Ramka otzrymana ID: 0x%lX", received_msg.id);
@@ -142,9 +184,15 @@ static void rx_task(void *arg)
                     rx_fuel_level = (received_msg.data[3] * 100)/ 255; 
             } else if(received_msg.data[2] == 0x0D){
                     rx_speed = received_msg.data[3];
+            } else if(received_msg.data[2] == 0x05){
+                    rx_coolant_temp = received_msg.data[3] - 40;
+            }else if(received_msg.data[2] == 0x11){
+                    rx_throttle_pos = (received_msg.data[3] * 100) / 255;
+            }else if(received_msg.data[2] == 0x04){
+                    rx_engine_load = (received_msg.data[3] * 100) / 255;
             }
-                ESP_LOGI(TAG, "Ramka CAN z Paramterami Odebarana %d, Fuel Level: %d%%, Speed: %d KM/H", current_rpm, rx_fuel_level, rx_speed);
-                display_update(current_rpm, rx_fuel_level, rx_speed);
+                ESP_LOGI(TAG, "Ramka CAN z Paramterami Odebarana %d, Fuel Level: %d%%, Speed: %d KM/H, Coolant Temp: %d, Throttle Pos: %d, Engine Load: %d", current_rpm, rx_fuel_level, rx_speed, rx_coolant_temp, rx_throttle_pos, rx_engine_load);
+                display_update(current_rpm, rx_fuel_level, rx_speed, rx_coolant_temp, rx_throttle_pos, rx_engine_load);
             }
         }
     }
