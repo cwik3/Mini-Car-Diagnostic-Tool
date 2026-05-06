@@ -55,7 +55,14 @@ static const uint8_t font_5x7[][5] = {
     {0x23, 0x13, 0x08, 0x64, 0x62},
     {0x7F, 0x08, 0x14, 0x22, 0x41},
     {0x20, 0x10, 0x08, 0x04, 0x02},
-    {0x7F, 0x08, 0x08, 0x08, 0x7F}  
+    {0x7F, 0x08, 0x08, 0x08, 0x7F},
+    {0x3E, 0x41, 0x41, 0x41, 0x22}, 
+    {0x3E, 0x41, 0x41, 0x41, 0x3E}, 
+    {0x01, 0x01, 0x7F, 0x01, 0x01}, 
+    {0x7E, 0x11, 0x11, 0x11, 0x7E}, 
+    {0x7F, 0x41, 0x41, 0x22, 0x1C}, 
+    {0x06, 0x09, 0x09, 0x06, 0x00} 
+
 };
 
 static void oled_print_char(uint8_t character) {
@@ -72,6 +79,12 @@ static void oled_print_char(uint8_t character) {
     if (character == 'K') index = 19;
     if(character == 'H') index = 21;
     if(character == '/') index = 20;
+    if (character == 'C') index = 22;
+    if (character == 'O') index = 23;   
+    if (character == 'T') index = 24;
+    if (character == 'A') index = 25;
+    if (character == 'D') index = 26;
+    if (character == '*') index = 27;
     if (character == ' ') index = 10;
     uint8_t buf[6];
     memcpy(buf, font_5x7[index], 5);
@@ -85,7 +98,7 @@ static void oled_xy(uint8_t x, uint8_t y) {
     oled_send_command(0x10 + ((x >> 4) & 0x0F));
 }
 
-void display_update(int rpm, int fuel_level, int speed) {
+void display_update(int rpm, int fuel_level, int speed, int coolant_temp, int throttle_pos, int engine_load) {
     char text[32];
     oled_xy(10, 1); 
     snprintf(text, sizeof(text), "%3d KM/H    ", speed);
@@ -98,7 +111,22 @@ void display_update(int rpm, int fuel_level, int speed) {
         oled_print_char(text[i]);
     }
     oled_xy(10, 7); 
-    snprintf(text, sizeof(text), "FUEL %3d%%   ", fuel_level);
+    snprintf(text, sizeof(text), "FUEL%3d%%  ", fuel_level);
+    for (int i = 0; text[i] != '\0'; i++) {
+        oled_print_char(text[i]);
+    }
+    oled_xy(65, 1); 
+    snprintf(text, sizeof(text), "COOL %3dC ", coolant_temp);
+    for (int i = 0; text[i] != '\0'; i++) {
+        oled_print_char(text[i]);
+    }
+    oled_xy(65, 4); 
+    snprintf(text, sizeof(text), "THRO %3d%% ", throttle_pos);
+    for (int i = 0; text[i] != '\0'; i++) {
+        oled_print_char(text[i]);
+    }
+    oled_xy(65, 7); 
+    snprintf(text, sizeof(text), "ELOAD%3d%% ", engine_load);
     for (int i = 0; text[i] != '\0'; i++) {
         oled_print_char(text[i]);
     }
