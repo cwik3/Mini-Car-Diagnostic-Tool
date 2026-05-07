@@ -164,6 +164,42 @@ static bool rx_callback(twai_node_handle_t node,const twai_rx_done_event_data_t 
     return false;
 }
 
+static void obd_request_task(uint8_t pid){
+    static uint8_t request_data[8] = {0x02, 0x01, 0x00, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
+    request_data[2] = pid; 
+    static twai_frame_t request_frame = {
+        .header.id = 0x7DF, // request address
+        .header.ide = false,
+        .header.rtr = false,
+        .header.dlc = 8,
+        .buffer = request_data,
+        .buffer_len = 8
+    };
+    
+    // Teraz podajemy wskaźnik do nieśmiertelnej pamięci. Sprzęt się nie wykrzaczy!
+    esp_err_t ret = twai_node_transmit(node_hdl, &request_frame, pdMS_TO_TICKS(10));
+    if (ret != ESP_OK) {
+        ESP_LOGE("OBD_REQ", "Frame request failed for PID: 0x%02X", pid);
+    }
+}
+
+static void obd_request_recieve_task(void *arg){
+    uint8_t asked_pid[] = {0x0C, 0x2F, 0x0D, 0x05, 0x11, 0x04}; // PIDs we want to ask for
+    int num_pids = sizeof(asked_pid) / sizeof(asked_pid[0]);
+    int current_pid_index = 0;
+    while(1){
+        obd_request_task(asked_pid[current_pid_index]);
+        current_pid_index ++;
+        if(current_pid_index >= num_pids){
+            current_pid_index = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50)); // zwiekszyc przy prawdziwym aucie jak beda bledy
+    }
+}
+
+
+
+
 
 static void rx_task(void *arg)
 {
@@ -174,10 +210,15 @@ static void rx_task(void *arg)
     int rx_coolant_temp = 0;
     int rx_throttle_pos = 0;
     int rx_engine_load = 0;
+
+    TickType_t last_display_update = xTaskGetTickCount();
+    const TickType_t display_interval = pdMS_TO_TICKS(200); // Update display every 200 ms
+    // pytam o ramke co 50ms wiec często aktualizujemy dane, ale wyświetlacz aktualizujemy co 200ms żeby przez przypadek nie zapchac
+    // go duża ilością ramek i nie zcrashować go
     while (1) {
-        if (xQueueReceive(rx_queue, &received_msg, pdMS_TO_TICKS(1100)) == pdTRUE) {
+        if (xQueueReceive(rx_queue, &received_msg, pdMS_TO_TICKS(50)) == pdTRUE) {
             ESP_LOGI("RX", "Ramka otzrymana ID: 0x%lX", received_msg.id);
-            if (received_msg.id == 0x7E8) {
+            if (received_msg.id == 0x7E8) { // jezeli automat automaczna skrzynia biegów ma swoj PID request 0x7E9
                 if(received_msg.data[2] == 0x0C){             
                     current_rpm = ((received_msg.data[3] * 256) + received_msg.data[4]) / 4;
             }else if(received_msg.data[2] == 0x2F){
@@ -217,8 +258,10 @@ void can_mock_init(void)
     ESP_ERROR_CHECK(twai_new_node_onchip(&node_config, &node_hdl));
     ESP_LOGI(TAG, "TWAI node created");
     twai_mask_filter_config_t filter_cfg = {
-        .id = 0,
-        .mask = 0,
+        .id = 0x7E8,    // Adres bazowy 
+        .mask = 0x7F8,  // Maska (binarnie: 111 1111 1000). 
+                        // Każe sprzętowi sprawdzić górne 8 bitów, a zignorować 3 ostatnie.
+                        // Efekt: Sprzętowo przepuszcza TYLKO ramki od 0x7E8 do 0x7EF.
         .is_ext = false,
     };
     ESP_ERROR_CHECK(twai_node_config_mask_filter(node_hdl, 0, &filter_cfg));
@@ -232,5 +275,6 @@ void can_mock_init(void)
     ESP_LOGI(TAG, "TWAI Node enabled and running");
 
     xTaskCreate(tx_task, "twai_tx_task", 4096, NULL, 5, NULL);
+    xTaskCreate(obd_request_recieve_task, "obd_request_task", 4096, NULL, 5, NULL);
     xTaskCreate(rx_task, "twai_rx_task", 4096, NULL, 5, NULL);
 }
