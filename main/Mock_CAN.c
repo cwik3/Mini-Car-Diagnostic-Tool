@@ -141,8 +141,7 @@ static void tx_task(void *arg){
     }
 }
 
-
-static bool rx_callback(twai_node_handle_t node,const twai_rx_done_event_data_t *event_data, void *user_data){
+static bool rx_callback(twai_node_handle_t node, const twai_rx_done_event_data_t *event_data, void *user_data){
     uint8_t isr_buffer[8];
     twai_frame_t rx_message = {
         .buffer = isr_buffer,
@@ -158,7 +157,9 @@ static bool rx_callback(twai_node_handle_t node,const twai_rx_done_event_data_t 
             safe_msg.data[i] = isr_buffer[i];
         }
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-        xQueueSendFromISR(rx_queue, &safe_msg, &xHigherPriorityTaskWoken);
+        BaseType_t ret = xQueueSendFromISR(rx_queue, &safe_msg, &xHigherPriorityTaskWoken);
+        if (ret != pdTRUE) {
+        }
         return xHigherPriorityTaskWoken == pdTRUE;
     }
     return false;
@@ -176,8 +177,7 @@ static void obd_request_task(uint8_t pid){
         .buffer_len = 8
     };
     
-    // Teraz podajemy wskaźnik do nieśmiertelnej pamięci. Sprzęt się nie wykrzaczy!
-    esp_err_t ret = twai_node_transmit(node_hdl, &request_frame, pdMS_TO_TICKS(10));
+    esp_err_t ret = twai_node_transmit(node_hdl, &request_frame, pdMS_TO_TICKS(60));
     if (ret != ESP_OK) {
         ESP_LOGE("OBD_REQ", "Frame request failed for PID: 0x%02X", pid);
     }
@@ -193,13 +193,11 @@ static void obd_request_recieve_task(void *arg){
         if(current_pid_index >= num_pids){
             current_pid_index = 0;
         }
-        vTaskDelay(pdMS_TO_TICKS(50)); // zwiekszyc przy prawdziwym aucie jak beda bledy
+        
+        // Wskazówka: Jeśli bramka w Polo będzie odrzucać ramki, zmień 175 na 300 lub 500
+        vTaskDelay(pdMS_TO_TICKS(350)); 
     }
 }
-
-
-
-
 
 static void rx_task(void *arg)
 {
@@ -213,55 +211,59 @@ static void rx_task(void *arg)
 
     TickType_t last_display_update = xTaskGetTickCount();
     const TickType_t display_interval = pdMS_TO_TICKS(200); // Update display every 200 ms
-    // pytam o ramke co 50ms wiec często aktualizujemy dane, ale wyświetlacz aktualizujemy co 200ms żeby przez przypadek nie zapchac
-    // go duża ilością ramek i nie zcrashować go
+
     while (1) {
         if (xQueueReceive(rx_queue, &received_msg, pdMS_TO_TICKS(50)) == pdTRUE) {
             ESP_LOGI("RX", "Ramka otzrymana ID: 0x%lX", received_msg.id);
-            if (received_msg.id == 0x7E8) { // jezeli automat automaczna skrzynia biegów ma swoj PID request 0x7E9
-                if(received_msg.data[2] == 0x0C){             
+            ESP_LOGW("RAW_RX", "Odebrano ID: 0x%03lX | DLC: %d | Data: %02X %02X %02X %02X %02X %02X %02X %02X",
+                     received_msg.id, received_msg.dlc,
+                     received_msg.data[0], received_msg.data[1], received_msg.data[2], received_msg.data[3],
+                     received_msg.data[4], received_msg.data[5], received_msg.data[6], received_msg.data[7]);
+                     
+            if (received_msg.id >= 0x7E8 && received_msg.id <= 0x7EF) { 
+                if(received_msg.data[2] == 0x0C){            
                     current_rpm = ((received_msg.data[3] * 256) + received_msg.data[4]) / 4;
-            }else if(received_msg.data[2] == 0x2F){
+                }else if(received_msg.data[2] == 0x2F){
                     rx_fuel_level = (received_msg.data[3] * 100)/ 255; 
-            } else if(received_msg.data[2] == 0x0D){
+                } else if(received_msg.data[2] == 0x0D){
                     rx_speed = received_msg.data[3];
-            } else if(received_msg.data[2] == 0x05){
+                } else if(received_msg.data[2] == 0x05){
                     rx_coolant_temp = received_msg.data[3] - 40;
-            }else if(received_msg.data[2] == 0x11){
+                }else if(received_msg.data[2] == 0x11){
                     rx_throttle_pos = (received_msg.data[3] * 100) / 255;
-            }else if(received_msg.data[2] == 0x04){
+                }else if(received_msg.data[2] == 0x04){
                     rx_engine_load = (received_msg.data[3] * 100) / 255;
+                }
             }
-                ESP_LOGI(TAG, "Ramka CAN z Paramterami Odebarana %d, Fuel Level: %d%%, Speed: %d KM/H, Coolant Temp: %d, Throttle Pos: %d, Engine Load: %d", current_rpm, rx_fuel_level, rx_speed, rx_coolant_temp, rx_throttle_pos, rx_engine_load);
-                display_update(current_rpm, rx_fuel_level, rx_speed, rx_coolant_temp, rx_throttle_pos, rx_engine_load);
-            }
+        } 
+        TickType_t current_time = xTaskGetTickCount();
+        if (current_time - last_display_update >= display_interval) {
+            display_update(current_rpm, rx_fuel_level, rx_speed, rx_coolant_temp, rx_throttle_pos, rx_engine_load);
+            last_display_update = current_time;
         }
     }
 }
-
-
 
 void can_mock_init(void)
 {
     ESP_LOGI(TAG, "Initializing TWAI");
     rx_queue = xQueueCreate(10, sizeof(can_message_t));
-    //Configuration inside the function
+    
     twai_onchip_node_config_t node_config = {
         .io_cfg.tx = 5,             // assigin tx
         .io_cfg.rx = 4,             // assign rx
-        .bit_timing.bitrate = 500000, // baud rate 500k
+        .bit_timing.bitrate = 500000, //500k br
         .tx_queue_depth = 5,          
-        .flags.enable_self_test = true,
-        .flags.enable_loopback = true
+        .flags.enable_self_test = false,
+        .flags.enable_loopback = false
     };
 
     ESP_ERROR_CHECK(twai_new_node_onchip(&node_config, &node_hdl));
     ESP_LOGI(TAG, "TWAI node created");
+    
     twai_mask_filter_config_t filter_cfg = {
         .id = 0x7E8,    // Adres bazowy 
-        .mask = 0x7F8,  // Maska (binarnie: 111 1111 1000). 
-                        // Każe sprzętowi sprawdzić górne 8 bitów, a zignorować 3 ostatnie.
-                        // Efekt: Sprzętowo przepuszcza TYLKO ramki od 0x7E8 do 0x7EF.
+        .mask = 0x007,  // POPRAWIONO Z 0x7FF NA 0x007 -> Hardware Filter Aktywny!
         .is_ext = false,
     };
     ESP_ERROR_CHECK(twai_node_config_mask_filter(node_hdl, 0, &filter_cfg));
@@ -274,7 +276,7 @@ void can_mock_init(void)
     ESP_ERROR_CHECK(twai_node_enable(node_hdl));
     ESP_LOGI(TAG, "TWAI Node enabled and running");
 
-    xTaskCreate(tx_task, "twai_tx_task", 4096, NULL, 5, NULL);
+    //xTaskCreate(tx_task, "twai_tx_task", 4096, NULL, 5, NULL);
     xTaskCreate(obd_request_recieve_task, "obd_request_task", 4096, NULL, 5, NULL);
     xTaskCreate(rx_task, "twai_rx_task", 4096, NULL, 5, NULL);
 }
