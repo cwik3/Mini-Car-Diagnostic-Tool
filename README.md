@@ -13,6 +13,7 @@
       <h3>🛠️ Prototype Assembly & Wiring</h3>
       <p>Iterative prototype featuring an ESP32 controller, internal OLED module, and custom 3D-printed enclosure.</p>
       <img src="https://github.com/cwik3/Mini-Car-Diagnostic-Tool/blob/main/93c0840e-02d2-49c2-ab06-328a5f3fa252.jpg" width="48%">
+      <p/> <img src="https://github.com/cwik3/Mini-Car-Diagnostic-Tool/blob/main/c1918fcb-c611-481b-96a0-f01cd2e0c2a6.jpg" width="48%">
     </td>
   </tr>
   <tr>
